@@ -43,7 +43,8 @@ POST /contacts
 	"firstName": "John",
 	"lastName": "Smith",
 	"email": "john@example.com",
-	"phone": "555-1234"
+	"phone": "555-1234",
+	"photoData": "data:image/jpeg;base64,..."
 }
 
 Config

@@ -15,16 +15,128 @@ const deleteModal = document.querySelector('#delete-modal');
 const cancelDeleteBtn = document.querySelector('#cancel-delete');
 const confirmDeleteBtn = document.querySelector('#confirm-delete');
 const logoutBtn = document.querySelector('#logout-btn');
+const photoInput = document.querySelector('#photo');
+const photoPreview = document.querySelector('#photo-preview');
+const removePhotoBtn = document.querySelector('#remove-photo');
+const photoStatus = document.querySelector('#photo-status');
 
 let currentPage = 1;
 let totalPages = 1;
 let currentSearch = '';
 let editingContactId = null;
 let deleteContactId = null;
+let currentPhotoData = '';
+const contactsById = new Map();
+const maxPhotoFileSize = 5 * 1024 * 1024;
+const maxPhotoDataLength = 700000;
+const maxPhotoDimension = 256;
+const allowedPhotoTypes = ['image/jpeg', 'image/png', 'image/webp'];
 
 const setStatus = (message, isError = false) => {
   statusBar.textContent = message;
   statusBar.classList.toggle('error', isError);
+};
+
+const setPhotoStatus = (message, isError = false) => {
+  photoStatus.textContent = message;
+  photoStatus.classList.toggle('error', isError);
+};
+
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+}[char]));
+
+const sanitizePhotoData = (photoData) => {
+  if (typeof photoData !== 'string' || photoData.length > maxPhotoDataLength) {
+    return '';
+  }
+
+  return /^data:image\/(?:png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/i.test(photoData)
+    ? photoData
+    : '';
+};
+
+const getFullName = (contact) => `${contact.firstName || ''} ${contact.lastName || ''}`.trim();
+
+const getInitials = (contact) => {
+  const first = (contact.firstName || '').trim().charAt(0);
+  const last = (contact.lastName || '').trim().charAt(0);
+  return `${first}${last}`.toUpperCase() || '?';
+};
+
+const renderAvatarMarkup = (contact) => {
+  const photoData = sanitizePhotoData(contact.photoData);
+  const fullName = getFullName(contact) || 'Contact';
+
+  if (photoData) {
+    return `<img src="${photoData}" alt="${escapeHtml(`${fullName} photo`)}" />`;
+  }
+
+  return `<span>${escapeHtml(getInitials(contact))}</span>`;
+};
+
+const updatePhotoPreview = () => {
+  const previewContact = {
+    firstName: contactForm.firstName.value,
+    lastName: contactForm.lastName.value,
+    photoData: currentPhotoData,
+  };
+
+  photoPreview.innerHTML = renderAvatarMarkup(previewContact);
+  removePhotoBtn.disabled = !currentPhotoData;
+};
+
+const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = () => reject(new Error('Could not read the selected photo.'));
+  reader.readAsDataURL(file);
+});
+
+const loadImage = (dataUrl) => new Promise((resolve, reject) => {
+  const image = new Image();
+  image.onload = () => resolve(image);
+  image.onerror = () => reject(new Error('Could not load the selected photo.'));
+  image.src = dataUrl;
+});
+
+const resizePhoto = async (file) => {
+  if (!allowedPhotoTypes.includes(file.type)) {
+    throw new Error('Choose a PNG, JPG, or WebP image.');
+  }
+
+  if (file.size > maxPhotoFileSize) {
+    throw new Error('Choose a photo smaller than 5 MB.');
+  }
+
+  const dataUrl = await readFileAsDataUrl(file);
+  const image = await loadImage(dataUrl);
+  const scale = Math.min(maxPhotoDimension / image.width, maxPhotoDimension / image.height, 1);
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('Photo could not be processed.');
+  }
+
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+
+  const resizedDataUrl = canvas.toDataURL('image/jpeg', 0.84);
+  if (resizedDataUrl.length > maxPhotoDataLength) {
+    throw new Error('The selected photo is too large.');
+  }
+
+  return resizedDataUrl;
 };
 
 const renderNotFound = () => {
@@ -70,39 +182,35 @@ const readError = async (response, fallback) => {
 
 const renderRows = (contacts) => {
   tableBody.innerHTML = '';
+  contactsById.clear();
 
   if (!contacts.length) {
     const row = document.createElement('tr');
-    row.innerHTML = '<td colspan="11" class="empty-row">No contacts found.</td>';
+    row.innerHTML = '<td colspan="12" class="empty-row">No contacts found.</td>';
     tableBody.appendChild(row);
     return;
   }
 
   contacts.forEach((contact, index) => {
+    const contactId = String(contact.id);
+    contactsById.set(contactId, contact);
+
     const row = document.createElement('tr');
-    row.dataset.firstName = contact.firstName || '';
-    row.dataset.lastName = contact.lastName || '';
-    row.dataset.email = contact.email || '';
-    row.dataset.phone = contact.phone || '';
-    row.dataset.address = contact.address || '';
-    row.dataset.city = contact.city || '';
-    row.dataset.state = contact.state || '';
-    row.dataset.zipCode = contact.zipCode || '';
-    row.dataset.notes = contact.notes || '';
     row.innerHTML = `
       <td>${index + 1}</td>
-      <td>${contact.firstName || ''}</td>
-      <td>${contact.lastName || ''}</td>
-      <td>${contact.email}</td>
-      <td>${contact.phone}</td>
-      <td>${contact.address || ''}</td>
-      <td>${contact.city || ''}</td>
-      <td>${contact.state || ''}</td>
-      <td>${contact.zipCode || ''}</td>
-      <td>${contact.notes || ''}</td>
+      <td><div class="contact-avatar">${renderAvatarMarkup(contact)}</div></td>
+      <td>${escapeHtml(contact.firstName || '')}</td>
+      <td>${escapeHtml(contact.lastName || '')}</td>
+      <td>${escapeHtml(contact.email)}</td>
+      <td>${escapeHtml(contact.phone)}</td>
+      <td>${escapeHtml(contact.address || '')}</td>
+      <td>${escapeHtml(contact.city || '')}</td>
+      <td>${escapeHtml(contact.state || '')}</td>
+      <td>${escapeHtml(contact.zipCode || '')}</td>
+      <td>${escapeHtml(contact.notes || '')}</td>
       <td class="actions">
-        <button class="icon-btn" data-action="edit" data-id="${contact.id}" title="Edit" aria-label="Edit">✎ Edit </button>
-        <button class="icon-btn" data-action="delete" data-id="${contact.id}" title="Delete" aria-label="Delete">🗑 Delete </button>
+        <button class="icon-btn" data-action="edit" data-id="${escapeHtml(contactId)}" title="Edit" aria-label="Edit">✎ Edit </button>
+        <button class="icon-btn" data-action="delete" data-id="${escapeHtml(contactId)}" title="Delete" aria-label="Delete">🗑 Delete </button>
       </td>
     `;
     tableBody.appendChild(row);
@@ -164,6 +272,10 @@ const openModal = (mode, contact = {}) => {
   contactForm.state.value = contact.state || '';
   contactForm.zipCode.value = contact.zipCode || '';
   contactForm.notes.value = contact.notes || '';
+  currentPhotoData = sanitizePhotoData(contact.photoData);
+  photoInput.value = '';
+  setPhotoStatus('');
+  updatePhotoPreview();
   modal.classList.add('open');
   modal.setAttribute('aria-hidden', 'false');
 };
@@ -173,6 +285,9 @@ const closeModal = () => {
   modal.setAttribute('aria-hidden', 'true');
   contactForm.reset();
   editingContactId = null;
+  currentPhotoData = '';
+  setPhotoStatus('');
+  updatePhotoPreview();
 };
 
 const handleSave = async (event) => {
@@ -188,6 +303,7 @@ const handleSave = async (event) => {
     state: contactForm.state.value.trim(),
     zipCode: contactForm.zipCode.value.trim(),
     notes: contactForm.notes.value.trim(),
+    photoData: currentPhotoData,
   };
 
   const isEditing = Boolean(editingContactId);
@@ -294,6 +410,35 @@ confirmDeleteBtn.addEventListener('click', async () => {
 });
 
 contactForm.addEventListener('submit', handleSave);
+contactForm.firstName.addEventListener('input', updatePhotoPreview);
+contactForm.lastName.addEventListener('input', updatePhotoPreview);
+
+photoInput.addEventListener('change', async (event) => {
+  const [file] = event.target.files;
+  if (!file) {
+    return;
+  }
+
+  const previousPhotoData = currentPhotoData;
+  setPhotoStatus('');
+
+  try {
+    currentPhotoData = await resizePhoto(file);
+    updatePhotoPreview();
+  } catch (error) {
+    currentPhotoData = previousPhotoData;
+    photoInput.value = '';
+    updatePhotoPreview();
+    setPhotoStatus(error.message || 'Photo could not be added.', true);
+  }
+});
+
+removePhotoBtn.addEventListener('click', () => {
+  currentPhotoData = '';
+  photoInput.value = '';
+  setPhotoStatus('');
+  updatePhotoPreview();
+});
 
 tableBody.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-action]');
@@ -305,28 +450,19 @@ tableBody.addEventListener('click', async (event) => {
   const contactId = button.dataset.id;
 
   if (action === 'delete') {
-    const row = button.closest('tr');
-    const name = `${row.dataset.firstName || ''} ${row.dataset.lastName || ''}`.trim();
-    openDeleteModal(contactId, name);
+    const contact = contactsById.get(contactId);
+    openDeleteModal(contactId, contact ? getFullName(contact) : '');
     return;
   }
 
-  const row = button.closest('tr');
-  openModal('edit', {
-    id: contactId,
-    firstName: row.dataset.firstName || '',
-    lastName: row.dataset.lastName || '',
-    email: row.dataset.email || '',
-    phone: row.dataset.phone || '',
-    address: row.dataset.address || '',
-    city: row.dataset.city || '',
-    state: row.dataset.state || '',
-    zipCode: row.dataset.zipCode || '',
-    notes: row.dataset.notes || '',
-  });
+  const contact = contactsById.get(contactId);
+  if (contact) {
+    openModal('edit', contact);
+  }
 });
 
 document.querySelector('#page-size').textContent = pageSize;
+updatePhotoPreview();
 loadContacts();
 
 logoutBtn.addEventListener('click', async () => {

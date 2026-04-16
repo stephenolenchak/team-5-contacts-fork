@@ -48,6 +48,7 @@
             <thead>
               <tr>
                 <th class="col-id">ID</th>
+                <th class="col-photo">Photo</th>
                 <th class="col-first">First</th>
                 <th class="col-last">Last</th>
                 <th class="col-email">Email</th>
@@ -88,6 +89,18 @@
       <h2 id="modal-title">Create Contact</h2>
 
       <form id="contact-form">
+        <div class="photo-editor">
+          <div class="photo-preview" id="photo-preview" aria-label="Contact photo preview">
+            <span>?</span>
+          </div>
+          <div class="photo-controls">
+            <label class="photo-upload" for="photo">Choose Photo</label>
+            <input class="photo-input" id="photo" name="photo" type="file" accept="image/png,image/jpeg,image/webp" />
+            <button class="ghost-btn photo-remove" type="button" id="remove-photo">Remove</button>
+            <p class="photo-status" id="photo-status" aria-live="polite"></p>
+          </div>
+        </div>
+
         <div class="form-row">
           <label for="first-name">First Name</label>
           <input id="first-name" name="firstName" type="text" maxlength="50" autocomplete="given-name" required />

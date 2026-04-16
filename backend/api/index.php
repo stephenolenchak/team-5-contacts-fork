@@ -69,6 +69,47 @@ function db(): PDO
     return $pdo;
 }
 
+function ensureContactPhotoColumn(PDO $pdo): void
+{
+    static $checked = false;
+    if ($checked) {
+        return;
+    }
+
+    $stmt = $pdo->query("SHOW COLUMNS FROM Contacts LIKE 'photoData'");
+    if (!$stmt->fetch()) {
+        $pdo->exec('ALTER TABLE Contacts ADD COLUMN photoData MEDIUMTEXT NULL AFTER notes');
+    }
+
+    $checked = true;
+}
+
+function normalizePhotoData($value): ?string
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+
+    if (!is_string($value)) {
+        respond(400, ['error' => 'Photo data is invalid.']);
+    }
+
+    $photoData = trim($value);
+    if ($photoData === '') {
+        return null;
+    }
+
+    if (strlen($photoData) > 700000) {
+        respond(400, ['error' => 'Photo upload is too large.']);
+    }
+
+    if (!preg_match('/^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+\/=]+$/i', $photoData)) {
+        respond(400, ['error' => 'Photo must be a PNG, JPG, or WebP image.']);
+    }
+
+    return $photoData;
+}
+
 function requireAuth(): int
 {
     if (empty($_SESSION['userId'])) {
@@ -171,6 +212,7 @@ if ($resource === 'contacts') {
         $offset = ($page - 1) * $pageSize;
 
         $pdo = db();
+        ensureContactPhotoColumn($pdo);
         
         // First, get the total count of contacts
         if ($search === '') {
@@ -239,16 +281,19 @@ if ($resource === 'contacts') {
         $state = trim($data['state'] ?? '');
         $zipCode = trim($data['zipCode'] ?? '');
         $notes = trim($data['notes'] ?? '');
+        $photoData = normalizePhotoData($data['photoData'] ?? null);
+
         if(strlen($firstName) > 50 || strlen($lastName) > 50 || strlen($email) > 100 || strlen($phone) > 20 || strlen($address) > 255 || strlen($city) > 50 || strlen($state) > 50 ||
          strlen($zipCode) > 10) {
             respond(400, ['error' => 'A field is too long.']);
         }
         $pdo = db();
+        ensureContactPhotoColumn($pdo);
         $stmt = $pdo->prepare(
-            'INSERT INTO Contacts (userId, firstName, lastName, email, phone, address, city, state, zipCode, notes) ' .
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO Contacts (userId, firstName, lastName, email, phone, address, city, state, zipCode, notes, photoData) ' .
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
-        $stmt->execute([$userId, $firstName, $lastName, $email, $phone, $address, $city, $state, $zipCode, $notes]);
+        $stmt->execute([$userId, $firstName, $lastName, $email, $phone, $address, $city, $state, $zipCode, $notes, $photoData]);
 
         respond(201, ['ok' => true, 'contactId' => (int)$pdo->lastInsertId()]);
     }
@@ -270,6 +315,8 @@ if ($resource === 'contacts' && $method === 'PUT' && $id !== null) {
     $state     = trim($data['state'] ?? '');
     $zipCode   = trim($data['zipCode'] ?? '');
     $notes     = trim($data['notes'] ?? '');
+    $hasPhotoData = array_key_exists('photoData', $data);
+    $photoData = $hasPhotoData ? normalizePhotoData($data['photoData']) : null;
 
     // Right now editing the contact only gives 3 fields: name, email, and number
     // Either the edit contact tab needs to add another field, or choose either first or last name for this conditional
@@ -281,6 +328,7 @@ if ($resource === 'contacts' && $method === 'PUT' && $id !== null) {
         respond(400, ['error' => 'A field entry is too long.']);
     }
     $pdo = db();
+    ensureContactPhotoColumn($pdo);
 
     // Ensure the contact belongs to the logged-in user
     $check = $pdo->prepare('SELECT id FROM Contacts WHERE id = ? AND userId = ?');
@@ -290,25 +338,48 @@ if ($resource === 'contacts' && $method === 'PUT' && $id !== null) {
         respond(404, ['error' => 'Contact not found.']);
     }
 
-    $stmt = $pdo->prepare(
-        'UPDATE Contacts
-         SET firstName = ?, lastName = ?, email = ?, phone = ?, address = ?, city = ?, state = ?, zipCode = ?, notes = ?
-         WHERE id = ? AND userId = ?'
-    );
+    if ($hasPhotoData) {
+        $stmt = $pdo->prepare(
+            'UPDATE Contacts
+             SET firstName = ?, lastName = ?, email = ?, phone = ?, address = ?, city = ?, state = ?, zipCode = ?, notes = ?, photoData = ?
+             WHERE id = ? AND userId = ?'
+        );
 
-    $stmt->execute([
-        $firstName,
-        $lastName,
-        $email,
-        $phone,
-        $address,
-        $city,
-        $state,
-        $zipCode,
-        $notes,
-        $contactId,
-        $userId
-    ]);
+        $stmt->execute([
+            $firstName,
+            $lastName,
+            $email,
+            $phone,
+            $address,
+            $city,
+            $state,
+            $zipCode,
+            $notes,
+            $photoData,
+            $contactId,
+            $userId
+        ]);
+    } else {
+        $stmt = $pdo->prepare(
+            'UPDATE Contacts
+             SET firstName = ?, lastName = ?, email = ?, phone = ?, address = ?, city = ?, state = ?, zipCode = ?, notes = ?
+             WHERE id = ? AND userId = ?'
+        );
+
+        $stmt->execute([
+            $firstName,
+            $lastName,
+            $email,
+            $phone,
+            $address,
+            $city,
+            $state,
+            $zipCode,
+            $notes,
+            $contactId,
+            $userId
+        ]);
+    }
 
     respond(200, ['ok' => true]);
 }
